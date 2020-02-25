@@ -1,3 +1,23 @@
+/* PES Project 2
+ *@file	Project2.c
+ *@brief	LEDs blink in predefined pattern and change color with slider touches
+ *
+ *This program blinks an onboard tricolor LED on and off in a predefined timing
+ *pattern. The program runs through 10 cycles of this pattern and then ends. The LEDs
+ *will change color based on input from the capacitive touch sensor (left = red,
+ *middle = green, left = blue). The program can also be configured to run on a PC with
+ *the altered behavior of a print statement in place of the LED turning on or off (i.e.
+ *"B LED ON" instead of the blue LED turning on) and the color changing every 3 activations
+ *rather than in response to the touch slider. The program can also be configured to run in
+ *DEBUG mode on either the board or the PC. Debug mode outputs extra print statements which
+ *give extra information about program activity (program start/end, cycle count, slider value
+ *or color change, timer start).
+ *
+ *Target board: Freedom Freescale KL25Z
+ *
+ *@author Katherine Hemzacek
+ */
+
 /*
  * Copyright 2016-2020 NXP
  * All rights reserved.
@@ -32,39 +52,95 @@
  * @file    Project2.c
  * @brief   Application entry point.
  */
+
+
+/* DEFINE TARGET */
+#define FB_RUN
+
+#ifdef	FB_RUN
+#define MY_FRDM_BOARD
+#endif	/* FB_RUN */
+
+#ifdef	FB_DEBUG
+#define MY_FRDM_BOARD
+#define MY_DEBUG
+#endif	/* FB_DEBUG */
+
+#ifdef	PC_RUN
+#define MY_PC
+#endif	/* PC_RUN */
+
+#ifdef	PC_DEBUG
+#define MY_PC
+#define MY_DEBUG
+#endif	/* PC_DEBUG */
+
+
+/* INCLUDES */
 #include <stdio.h>
-#include "board.h"
-#include "peripherals.h"
-#include "pin_mux.h"
-#include "clock_config.h"
-#include "MKL25Z4.h"
-#include "fsl_debug_console.h"
-/* TODO: insert other include files here. */
+#ifdef MY_FRDM_BOARD
+	#include "board.h"
+	#include "peripherals.h"
+	#include "pin_mux.h"
+	#include "clock_config.h"
+	#include "MKL25Z4.h"
+	#include "fsl_debug_console.h"
+#endif /* MY_FRDM_BOARD */
 
-/* TODO: insert other definitions and declarations here. */
-#define R_LED_PORT	PTB //Port B
-#define R_LED_PIN	(18)
-#define G_LED_PORT	PTB //Port B
-#define G_LED_PIN	(19)
-#define B_LED_PORT	PTD //Port D
-#define B_LED_PIN	(1)
 
-#define MASK(x)	(1UL << (x))
+/* DEFINITIONS AND DECLARATIONS */
+#ifdef MY_FRDM_BOARD
+	// LED Peripheral
+	// referenced https://github.com/alexander-g-dean/ESF/blob/master/Code/Chapter_2/Source/main.c
+	#define R_LED_PORT	PTB //Port B
+	#define R_LED_PIN	(18)
+	#define G_LED_PORT	PTB //Port B
+	#define G_LED_PIN	(19)
+	#define B_LED_PORT	PTD //Port D
+	#define B_LED_PIN	(1)
+	GPIO_Type *LEDport = B_LED_PORT;
+	uint32_t LEDpin = B_LED_PIN;
+	#define MASK(x)	(1UL << (x))
 
-#define MILLISEC	4800
+	// Slider Peripheral
+	// referenced https://www.digikey.com/eewiki/display/microcontroller/Using+the+Capacitive+Touch+Sensor+on+the+FRDM-KL46Z
+	#define SCAN_OFFSET 544  // Offset for scan range
+	#define SCAN_DATA TSI0->DATA & 0xFFFF // Accessing the bits held in TSI0_DATA_TSICNT
+	volatile uint32_t slider = 0;
 
-uint32_t delayTable[4] = {500, 1000, 2000, 3000};
+	// Processor Timing
+	#define MILLISEC	4800
+#endif	/* MY_FRDM_BOARD */
+
+#ifdef MY_PC
+	// Typedefs
+	typedef unsigned int uint32_t;
+	typedef unsigned char uint8_t;
+
+	// Print macro
+	#define	PRINTF	printf
+
+	// Color Change Tracking
+	uint8_t activCNT = 0;
+
+	// Processor Timing
+	#define MILLISEC	430000
+#endif	/* MY_PC */
+
+/* All Platforms */
+// Blink Pattern
+#define NUM_CYCLES	10
+uint32_t onDelay[4] = {500, 1000, 2000, 3000};
 uint32_t offDelay = 500;
 
-enum LEDcolor{red, green, blue}color;
-GPIO_Type *LEDport = B_LED_PORT;
-uint32_t LEDpin = B_LED_PIN;
+// Colors
+char colorTXT[3] = {'R', 'G', 'B'};
+enum LEDcolor{red, green, blue};
+enum LEDcolor color = blue;
 
-#define SCAN_OFFSET 544  // Offset for scan range
-#define SCAN_DATA TSI0->DATA & 0xFFFF // Accessing the bits held in TSI0_DATA_TSICNT
 
-volatile uint32_t slider = 0;
-
+/* FUNCTION DEFINITIONS */
+#ifdef	MY_FRDM_BOARD
 /*
  * @brief	Initialize LED pins
  * taken from https://github.com/alexander-g-dean/ESF/blob/master/Code/Chapter_2/Source/main.c
@@ -94,8 +170,18 @@ void LED_init(void)
 	G_LED_PORT->PSOR = MASK(G_LED_PIN);
 	B_LED_PORT->PSOR = MASK(B_LED_PIN);
 
-}
+	#ifdef	MY_DEBUG
+		PRINTF("LEDS INITIALIZED\n");
+	#endif	/* MY_DEBUG */
 
+}
+#endif	/* MY_FRDM_BOARD */
+
+#ifdef	MY_FRDM_BOARD
+/*
+ * @brief	Changes LED color
+ * changes peripheral ports and pins to light the right color LED
+ */
 void change_LED_color()
 {
 	if(color == red){
@@ -109,7 +195,49 @@ void change_LED_color()
 		LEDpin = B_LED_PIN;
 	}
 }
+#endif	/* MY_FRDM_BOARD */
 
+/*
+ * @brief	Turns on LED
+ * on board, clears gpio pin to turn on light
+ * on PC, prints *color* LED ON message
+ * //referenced https://github.com/alexander-g-dean/ESF/blob/master/Code/Chapter_2/Source/main.c
+ */
+void LED_on()
+{
+	#ifdef	MY_FRDM_BOARD
+	LEDport->PCOR = MASK(LEDpin);
+	#ifdef	MY_DEBUG
+		PRINTF("%c LED ON\n", colorTXT[color]);
+	#endif	/* MY_DEBUG */
+	#endif	/* MY_FRDM_BOARD */
+
+	#ifdef	MY_PC
+		PRINTF("%c LED ON\n", colorTXT[color]);
+	#endif	/* MY_PC */
+}
+
+/*
+ * @brief	Turns off LED
+ * on board, sets gpio pin to turn off light
+ * on PC, prints *color* LED OFF message
+ * //referenced https://github.com/alexander-g-dean/ESF/blob/master/Code/Chapter_2/Source/main.c
+ */
+void LED_off()
+{
+	#ifdef	MY_FRDM_BOARD
+	LEDport->PSOR = MASK(LEDpin);
+	#ifdef	MY_DEBUG
+   		PRINTF("%c LED OFF\n", colorTXT[color]);
+	#endif	/* MY_DEBUG */
+	#endif	/* MY_FRDM_BOARD */
+
+	#ifdef	MY_PC
+		PRINTF("%c LED OFF\n", colorTXT[color]);
+	#endif	/* MY_PC */
+}
+
+#ifdef	MY_FRDM_BOARD
 /*
  * @brief	TSI initialization function
  * taken from https://www.digikey.com/eewiki/display/microcontroller/Using+the+Capacitive+Touch+Sensor+on+the+FRDM-KL46Z
@@ -136,16 +264,17 @@ void Touch_Init()
 								TSI_GENCS_EOSF_MASK ; // End of scan flag, set to 1 to clear
 								//TSI_GENCS_CURSW_MASK; // Do not swap current sources
 
-
-	// The TSI threshold isn't used is in this application
-//	TSI0->TSHD = 	TSI_TSHD_THRESH(0x00) |
-//								TSI_TSHD_THRESL(0x00);
-
+	#ifdef	MY_DEBUG
+    	PRINTF("SLIDER INITIALIZED\n");
+	#endif	/* MY_DEBUG */
 
 }
+#endif	/* MY_FRDM_BOARD */
 
+#ifdef	MY_FRDM_BOARD
 /*
- * @brief	Function to read touch sensor from low to high capacitance for left to right
+ * @brief	Function to read touch sensor
+ * low to high capacitance from left to right
  * taken from https://www.digikey.com/eewiki/display/microcontroller/Using+the+Capacitive+Touch+Sensor+on+the+FRDM-KL46Z
  */
 uint32_t  Touch_Scan_LH(void)
@@ -158,36 +287,96 @@ uint32_t  Touch_Scan_LH(void)
 
 	return scan - SCAN_OFFSET;
 }
+#endif	/* MY_FRDM_BOARD */
 
 /*
- * @brief	Delay loop with slider polling
+ * @brief	Checks if color should be changed for the next LED_on cycle
+ * on board, checks if/where slider touched
+ * on PC, checks if 3 activations have occurred
+ */
+void check_color_change()
+{
+	#ifdef	MY_FRDM_BOARD
+	if(slider > 50){	// untouched baseline <50 expected
+		if(slider < 500){	// left touch
+			color = red;
+    	}else if(slider > 1500){	//right touch
+	        color = blue;
+	    }else{				// middle touch
+	        color = green;
+	    }
+	    change_LED_color();	// change LED based on slider touch
+	}
+	#endif	/* MY_FRDM_BOARD */
+
+	#ifdef	MY_PC
+	if(activCNT == 3){
+		if(color == red){
+			color = blue;
+		}else if(color == blue){
+			color = green;
+		}else if(color == green){
+			color = red;
+		}
+		#ifdef	MY_DEBUG
+			PRINTF("COLOR CHANGE\n");
+		#endif	/* MY_DEBUG */
+		activCNT = 0;
+	}
+	#endif	/* MY_PC */
+}
+
+
+/*
+ * @brief	Busy-Wait with delay and slider polling
  * referenced "Getting Started with KL25Z on MCUXpresso IDE" Shreya Chakraborty
- * experimentally determined that entire delay loop (w/out NOP) is 10 clock cycles
+ * experimentally determined that inner while loop is 10 clock cycles
  * ^^ used to set MILLISEC macro
  */
-static void delay(volatile uint32_t number)
+static void delay_poll(volatile uint32_t number)
 {
-	volatile uint32_t sliderPoll = 0;
+	#ifdef	MY_DEBUG
+    	PRINTF("START %d MILLISECOND DELAY\n", number);
+	#endif	/* MY_DEBUG */
+
 	int n = 100*MILLISEC;
 	number = number/100;
+	#ifdef	MY_FRDM_BOARD
+	volatile uint32_t sliderPoll = 0;
+	#endif	/* MY_FRDM_BOARD */
+
+	//full delay-polling loop
 	while(number != 0){
+		//100ms delay loop
 		while(n !=0){
 			n--;
 		}
+	#ifdef	MY_FRDM_BOARD
+		//poll slider and check if touched
 		sliderPoll = Touch_Scan_LH();
-		if(sliderPoll > 50){
-			slider = sliderPoll;
+		if(sliderPoll == -544) sliderPoll = 0;	//before slider has been touched at all
+												//scan reads -544, related to offset
+		if(sliderPoll > 50){	// untouched baseline of <50 expected
+			if(slider != sliderPoll){	//new slider value
+				slider = sliderPoll;
+				#ifdef	MY_DEBUG
+					PRINTF("SLIDER VALUE %d\n", slider);
+				#endif	/* MY_DEBUG */
+			}
 		}
+	#endif	/* MY_FRDM_BOARD */
 		n = 100*MILLISEC;
 		number--;
 	}
 }
 
+
+/* MAIN FUNCTION */
 /*
- * @brief   Application entry point.
+ * @brief   Main application entry point.
  */
 int main(void) {
-
+#ifdef	MY_FRDM_BOARD
   	/* Init board hardware. */
     BOARD_InitBootPins();
     BOARD_InitBootClocks();
@@ -195,41 +384,45 @@ int main(void) {
   	/* Init FSL debug console. */
     BOARD_InitDebugConsole();
 
+	#ifdef	MY_DEBUG
+    	PRINTF("BOARD INITIALIZED\n");
+	#endif	/* MY_DEBUG */
+
+    /* Init peripherals */
     LED_init();
     Touch_Init();
+#endif	/* MY_FRDM_BOARD */
 
-    PRINTF("Hello World\n");
-
-    /* Force the counter to be placed into memory. */
+    /* Init loop counters */
+    uint32_t cycleCNT = NUM_CYCLES;
     volatile static int i = 0 ;
-    /* Enter an infinite loop, just incrementing a counter. */
-    while(1) {
-        //i++ ;
-        /* 'Dummy' NOP to allow source level single stepping of
-            tight while() loop */
-        //__asm volatile ("nop");
-        //referenced https://github.com/alexander-g-dean/ESF/blob/master/Code/Chapter_2/Source/main.c
+
+	#ifdef	MY_PC
+	#ifdef	MY_DEBUG
+    	PRINTF("START PROGRAM\n");
+	#endif	/* MY_DEBUG */
+    #endif	/* MY_PC */
+
+    /* Main Loop */
+    while(cycleCNT != 0) {
+		#ifdef	MY_DEBUG
+    		PRINTF("PATTERN CYCLE %d\n", (NUM_CYCLES-cycleCNT+1));
+		#endif	/* MY_DEBUG */
 
         for(i = 0; i < 4; i++){
-        	LEDport->PCOR = MASK(LEDpin);	//LED on
-        	delay(delayTable[i]);
-        	LEDport->PSOR = MASK(LEDpin);	//LED off
-        	delay(offDelay);
-        	//slider = Touch_Scan_LH();
-        	PRINTF("%d\n", slider);
-        	if(slider > 50){
-        		if(slider < 500){
-        			color = red;
-        		}else if(slider > 1500){
-        			color = blue;
-        		}else{
-        			color = green;
-        		}
-        		change_LED_color();
-        	}
+        	LED_on();
+			#ifdef	MY_PC
+        		activCNT++;
+			#endif	/* MY_PC */
+        	delay_poll(onDelay[i]);
+        	LED_off();
+        	delay_poll(offDelay);
+        	check_color_change();
         }
-
-
+        cycleCNT--;
     }
+	#ifdef	MY_DEBUG
+		PRINTF("END PROGRAM\n");
+	#endif	/* MY_DEBUG */
     return 0 ;
 }
