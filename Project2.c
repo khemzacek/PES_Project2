@@ -53,26 +53,17 @@
 
 #define MILLISEC	4800
 
-uint32_t delayTable[4] = {500*MILLISEC, 1000*MILLISEC, 2000*MILLISEC, 3000*MILLISEC};
-uint32_t offDelay = 500*MILLISEC;
+uint32_t delayTable[4] = {500, 1000, 2000, 3000};
+uint32_t offDelay = 500;
 
 enum LEDcolor{red, green, blue}color;
-GPIO_Type *LEDport = R_LED_PORT;
-uint32_t LEDpin = R_LED_PIN;
+GPIO_Type *LEDport = B_LED_PORT;
+uint32_t LEDpin = B_LED_PIN;
 
-/*
- * @brief	Delay Loop
- * taken from "Getting Started with KL25Z on MCUXpresso IDE" Shreya Chakraborty
- * experimentally determined that entire delay loop (w/out NOP) is 10 clock cycles
- * ^^ used to set MILLISEC macro
- */
-static void delay(volatile uint32_t number)
-{
-	while(number != 0){
-		//__asm volatile("NOP");
-		number--;
-	}
-}
+#define SCAN_OFFSET 544  // Offset for scan range
+#define SCAN_DATA TSI0->DATA & 0xFFFF // Accessing the bits held in TSI0_DATA_TSICNT
+
+volatile uint32_t slider = 0;
 
 /*
  * @brief	Initialize LED pins
@@ -108,17 +99,87 @@ void LED_init(void)
 void change_LED_color()
 {
 	if(color == red){
-		color = green;
-		LEDport = G_LED_PORT;
-		LEDpin = G_LED_PIN;
-	}else if(color == green){
-		color = blue;
-		LEDport = B_LED_PORT;
-		LEDpin = B_LED_PIN;
-	}else if(color == blue){
-		color = red;
 		LEDport = R_LED_PORT;
 		LEDpin = R_LED_PIN;
+	}else if(color == green){
+		LEDport = G_LED_PORT;
+		LEDpin = G_LED_PIN;
+	}else if(color == blue){
+		LEDport = B_LED_PORT;
+		LEDpin = B_LED_PIN;
+	}
+}
+
+/*
+ * @brief	TSI initialization function
+ * taken from https://www.digikey.com/eewiki/display/microcontroller/Using+the+Capacitive+Touch+Sensor+on+the+FRDM-KL46Z
+ */
+void Touch_Init()
+{
+	// Enable clock for TSI PortB 16 and 17
+	SIM->SCGC5 |= SIM_SCGC5_TSI_MASK;
+
+
+	TSI0->GENCS = TSI_GENCS_OUTRGF_MASK |  // Out of range flag, set to 1 to clear
+								//TSI_GENCS_ESOR_MASK |  // This is disabled to give an interrupt when out of range.  Enable to give an interrupt when end of scan
+								TSI_GENCS_MODE(0u) |  // Set at 0 for capacitive sensing.  Other settings are 4 and 8 for threshold detection, and 12 for noise detection
+								TSI_GENCS_REFCHRG(0u) | // 0-7 for Reference charge
+								TSI_GENCS_DVOLT(0u) | // 0-3 sets the Voltage range
+								TSI_GENCS_EXTCHRG(0u) | //0-7 for External charge
+								TSI_GENCS_PS(0u) | // 0-7 for electrode prescaler
+								TSI_GENCS_NSCN(31u) | // 0-31 + 1 for number of scans per electrode
+								TSI_GENCS_TSIEN_MASK | // TSI enable bit
+								//TSI_GENCS_TSIIEN_MASK | //TSI interrupt is disables
+								TSI_GENCS_STPE_MASK | // Enables TSI in low power mode
+								//TSI_GENCS_STM_MASK | // 0 for software trigger, 1 for hardware trigger
+								//TSI_GENCS_SCNIP_MASK | // scan in progress flag
+								TSI_GENCS_EOSF_MASK ; // End of scan flag, set to 1 to clear
+								//TSI_GENCS_CURSW_MASK; // Do not swap current sources
+
+
+	// The TSI threshold isn't used is in this application
+//	TSI0->TSHD = 	TSI_TSHD_THRESH(0x00) |
+//								TSI_TSHD_THRESL(0x00);
+
+
+}
+
+/*
+ * @brief	Function to read touch sensor from low to high capacitance for left to right
+ * taken from https://www.digikey.com/eewiki/display/microcontroller/Using+the+Capacitive+Touch+Sensor+on+the+FRDM-KL46Z
+ */
+uint32_t  Touch_Scan_LH(void)
+{
+	int scan;
+	TSI0->DATA = 	TSI_DATA_TSICH(10u); // Using channel 10 of The TSI
+	TSI0->DATA |= TSI_DATA_SWTS_MASK; // Software trigger for scan
+	scan = SCAN_DATA;
+	TSI0->GENCS |= TSI_GENCS_EOSF_MASK ; // Reset end of scan flag
+
+	return scan - SCAN_OFFSET;
+}
+
+/*
+ * @brief	Delay loop with slider polling
+ * referenced "Getting Started with KL25Z on MCUXpresso IDE" Shreya Chakraborty
+ * experimentally determined that entire delay loop (w/out NOP) is 10 clock cycles
+ * ^^ used to set MILLISEC macro
+ */
+static void delay(volatile uint32_t number)
+{
+	volatile uint32_t sliderPoll = 0;
+	int n = 100*MILLISEC;
+	number = number/100;
+	while(number != 0){
+		while(n !=0){
+			n--;
+		}
+		sliderPoll = Touch_Scan_LH();
+		if(sliderPoll > 50){
+			slider = sliderPoll;
+		}
+		n = 100*MILLISEC;
+		number--;
 	}
 }
 
@@ -135,6 +196,7 @@ int main(void) {
     BOARD_InitDebugConsole();
 
     LED_init();
+    Touch_Init();
 
     PRINTF("Hello World\n");
 
@@ -149,11 +211,22 @@ int main(void) {
         //referenced https://github.com/alexander-g-dean/ESF/blob/master/Code/Chapter_2/Source/main.c
 
         for(i = 0; i < 4; i++){
-        	LEDport->PCOR = MASK(LEDpin);
+        	LEDport->PCOR = MASK(LEDpin);	//LED on
         	delay(delayTable[i]);
-        	LEDport->PSOR = MASK(LEDpin);
+        	LEDport->PSOR = MASK(LEDpin);	//LED off
         	delay(offDelay);
-        	change_LED_color();
+        	//slider = Touch_Scan_LH();
+        	PRINTF("%d\n", slider);
+        	if(slider > 50){
+        		if(slider < 500){
+        			color = red;
+        		}else if(slider > 1500){
+        			color = blue;
+        		}else{
+        			color = green;
+        		}
+        		change_LED_color();
+        	}
         }
 
 
